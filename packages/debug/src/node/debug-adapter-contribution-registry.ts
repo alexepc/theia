@@ -31,7 +31,7 @@ export class DebugAdapterContributionRegistry {
     @inject(ContributionProvider) @named(DebugAdapterContribution)
     protected readonly contributions: ContributionProvider<DebugAdapterContribution>;
     protected *getContributions(debugType: string): IterableIterator<DebugAdapterContribution> {
-        for (const contribution of this.contributions.getContributions()) {
+        for (const contribution of this.contributions.getContributions(true)) {
             if (contribution.type === debugType || contribution.type === '*' || debugType === '*') {
                 yield contribution;
             }
@@ -80,7 +80,8 @@ export class DebugAdapterContributionRegistry {
         for (const contribution of this.getContributions(debugType)) {
             if (contribution.provideDebugConfigurations) {
                 try {
-                    configurations.push(...await contribution.provideDebugConfigurations(workspaceFolderUri));
+                    const result = await contribution.provideDebugConfigurations(workspaceFolderUri);
+                    configurations.push(...result);
                 } catch (e) {
                     console.error(e);
                 }
@@ -155,7 +156,10 @@ export class DebugAdapterContributionRegistry {
     async provideDebugAdapterExecutable(config: DebugConfiguration): Promise<DebugAdapterExecutable> {
         for (const contribution of this.getContributions(config.type)) {
             if (contribution.provideDebugAdapterExecutable) {
-                return contribution.provideDebugAdapterExecutable(config);
+                const executable = await contribution.provideDebugAdapterExecutable(config);
+                if (executable) {
+                    return executable;
+                }
             }
         }
         throw DebugError.NotFound(config.type);
