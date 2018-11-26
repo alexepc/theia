@@ -17,6 +17,7 @@
 import { injectable, inject } from 'inversify';
 import { MAIN_MENU_BAR, MenuContribution, MenuModelRegistry } from '../common/menu';
 import { KeybindingContribution, KeybindingRegistry } from './keybinding';
+import { FrontendApplicationContribution, OnWillStopEvent } from './frontend-application';
 import { CommandContribution, CommandRegistry, Command } from '../common/command';
 import { UriAwareCommandHandler } from '../common/uri-command-handler';
 import { SelectionService } from '../common/selection-service';
@@ -187,7 +188,7 @@ export const supportCopy = browser.isNative || document.queryCommandSupported('c
 export const supportPaste = browser.isNative || (!browser.isChrome && document.queryCommandSupported('paste'));
 
 @injectable()
-export class CommonFrontendContribution implements MenuContribution, CommandContribution, KeybindingContribution {
+export class CommonFrontendContribution implements FrontendApplicationContribution, MenuContribution, CommandContribution, KeybindingContribution {
 
     constructor(
         @inject(ApplicationShell) protected readonly shell: ApplicationShell,
@@ -510,5 +511,14 @@ export class CommonFrontendContribution implements MenuContribution, CommandCont
 
     protected async openAbout() {
         this.aboutDialog.open();
+    }
+
+    onWillStop(event: OnWillStopEvent) {
+        if (this.shell.canSaveAll()) {
+            event.preventStop();
+            event.onStay(() => {
+                this.messageService.info('Some documents should be saved, data will be lost otherwise.');
+            });
+        }
     }
 }
