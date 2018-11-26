@@ -15,7 +15,7 @@
  ********************************************************************************/
 
 import { inject, injectable, named } from 'inversify';
-import { ContributionProvider, CommandRegistry, MenuModelRegistry, ILogger, isOSX } from '../common';
+import { ContributionProvider, CommandRegistry, MenuModelRegistry, ILogger, isOSX, MessageService } from '../common';
 import { MaybePromise } from '../common/types';
 import { KeybindingRegistry } from './keybinding';
 import { Widget } from './widgets';
@@ -23,6 +23,7 @@ import { ApplicationShell } from './shell/application-shell';
 import { ShellLayoutRestorer } from './shell/shell-layout-restorer';
 import { FrontendApplicationStateService } from './frontend-application-state';
 import { preventNavigation, parseCssTime } from './browser';
+import { CorePreferences } from './core-preferences';
 
 /**
  * Clients can implement to get a callback for contributing widgets to a shell on start.
@@ -42,6 +43,12 @@ export interface FrontendApplicationContribution {
     onStart?(app: FrontendApplication): MaybePromise<void>;
 
     /**
+     * Called on `beforeunload` event, right before the window closes.
+     * Note: No async code allowed, this function has to run on one tick.
+     */
+    onWillStop?(event: OnWillStopEvent): void;
+
+    /**
      * Called when an application is stopped or unloaded.
      *
      * Note that this is implemented using `window.unload` which doesn't allow any asynchronous code anymore.
@@ -54,6 +61,23 @@ export interface FrontendApplicationContribution {
      * Should return a promise if it runs asynchronously.
      */
     initializeLayout?(app: FrontendApplication): MaybePromise<void>;
+}
+export interface OnWillStopEvent {
+
+    /**
+     * Current frontend application instance.
+     */
+    app: FrontendApplication;
+
+    /**
+     * Call this method to try and prevent the application from closing.
+     */
+    preventStop(): void;
+
+    /**
+     * Callback that will be called if the user stays on the page.
+     */
+    onStay(callback: () => void): void;
 }
 
 /**
@@ -71,6 +95,12 @@ export abstract class DefaultFrontendApplicationContribution implements Frontend
 
 @injectable()
 export class FrontendApplication {
+
+    @inject(CorePreferences)
+    protected readonly corePreferences: CorePreferences;
+
+    @inject(MessageService)
+    protected readonly messageService: MessageService;
 
     constructor(
         @inject(CommandRegistry) protected readonly commands: CommandRegistry,
@@ -138,6 +168,7 @@ export class FrontendApplication {
      * Register global event listeners.
      */
     protected registerEventListeners(): void {
+        window.addEventListener('beforeunload', this.getBeforeUnloadHandler());
         window.addEventListener('unload', () => {
             this.stateService.state = 'closing_window';
             this.layoutRestorer.storeLayout(this);
@@ -222,6 +253,45 @@ export class FrontendApplication {
                 );
             }
         }
+    }
+
+    /**
+     * `beforeunload` listener implementation
+     */
+    protected getBeforeUnloadHandler() {
+        return (event: BeforeUnloadEvent) => {
+            const confirmExit = this.corePreferences['application.confirmExit'];
+            let preventExit = false;
+
+            const onWillStopEvent: OnWillStopEvent = {
+                app: this,
+                preventStop() {
+                    preventExit = true;
+                },
+                onStay(callback) {
+                    // `beforeunload` event runs on 1 tick, every else is paused
+                    // This callback should be called once the dialog is closed.
+                    setTimeout(callback);
+                }
+            };
+            for (const contribution of this.contributions.getContributions()) {
+                if (contribution.onWillStop) {
+                    contribution.onWillStop(onWillStopEvent);
+                }
+            }
+            if (confirmExit === 'never') {
+                return;
+            }
+            if (confirmExit === 'always') {
+                preventExit = true;
+            }
+            if (preventExit) {
+                const e = (event || window.event);
+                e.returnValue = 'Application prevented the exit event.';
+                e.preventDefault();
+                return e.returnValue;
+            }
+        };
     }
 
     /**
